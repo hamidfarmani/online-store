@@ -23,7 +23,7 @@ public class InventoryServiceApplication {
 
 			Inventory inventory1 = new Inventory();
 			inventory1.setCode("iphone_14_red");
-			inventory.setQuantity(0);
+			inventory1.setQuantity(0);
 
 
 			inventoryRepository.save(inventory);
