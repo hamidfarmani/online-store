@@ -22,7 +22,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 public class OrderService {
 
   private final OrderRepository orderRepository;
-  private final WebClient webClient;
+  private final WebClient.Builder webClientBuilder;
 
   public void placeOrder(OrderRequest orderRequest) {
     Order order = new Order();
@@ -36,8 +36,8 @@ public class OrderService {
     List<String> orderItemCodes = order.getOrderLineItemList().stream().map(OrderLineItem::getCode)
         .toList();
 
-    InventoryResponse[] inventoryResponse = webClient.get()
-        .uri("http://localhost:8182/api/inventory",
+    InventoryResponse[] inventoryResponse = webClientBuilder.build().get()
+        .uri("http://inventory-service/api/inventory",
             uriBuilder -> uriBuilder.queryParam("code", orderItemCodes).build())
         .retrieve()
         .bodyToMono(InventoryResponse[].class)
