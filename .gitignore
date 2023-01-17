@@ -31,3 +31,12 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Docker-related files ###
+my-sql-data
+mongo-data
+/mysql_keycloak_data/
+/postgres/
+/postgres-inventory/
+/postgres-order/
+/grafana/
