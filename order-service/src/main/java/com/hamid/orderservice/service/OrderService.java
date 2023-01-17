@@ -1,5 +1,7 @@
 package com.hamid.orderservice.service;
 
+import brave.Span;
+import brave.Tracer;
 import com.hamid.orderservice.dto.InventoryResponse;
 import com.hamid.orderservice.dto.OrderLineItemDto;
 import com.hamid.orderservice.dto.OrderRequest;
@@ -23,6 +25,7 @@ public class OrderService {
 
   private final OrderRepository orderRepository;
   private final WebClient.Builder webClientBuilder;
+  private final Tracer tracer;
 
   public String placeOrder(OrderRequest orderRequest) {
     Order order = new Order();
@@ -36,22 +39,30 @@ public class OrderService {
     List<String> orderItemCodes = order.getOrderLineItemList().stream().map(OrderLineItem::getCode)
         .toList();
 
-    InventoryResponse[] inventoryResponse = webClientBuilder.build().get()
-        .uri("http://inventory-service/api/inventory",
-            uriBuilder -> uriBuilder.queryParam("code", orderItemCodes).build())
-        .retrieve()
-        .bodyToMono(InventoryResponse[].class)
-        .block();
+    log.info("Calling inventory service");
 
-    boolean allAvailableInInventory = Arrays.stream(inventoryResponse)
-        .allMatch(InventoryResponse::isInStock);
+    Span inventoryServiceLookup = tracer.nextSpan().name("InventoryServiceLookup");
 
-    if (allAvailableInInventory) {
-      orderRepository.save(order);
-      log.info("Order {} saved", order.getId());
-      return "Order placed successfully";
-    } else {
-      throw new IllegalArgumentException("Product is not in stock, please try again later");
+    try(Tracer.SpanInScope spanInScope = tracer.withSpanInScope(inventoryServiceLookup.start())){
+      InventoryResponse[] inventoryResponse = webClientBuilder.build().get()
+          .uri("http://inventory-service/api/inventory",
+              uriBuilder -> uriBuilder.queryParam("code", orderItemCodes).build())
+          .retrieve()
+          .bodyToMono(InventoryResponse[].class)
+          .block();
+
+      boolean allAvailableInInventory = Arrays.stream(inventoryResponse)
+          .allMatch(InventoryResponse::isInStock);
+
+      if (allAvailableInInventory) {
+        orderRepository.save(order);
+        log.info("Order {} saved", order.getId());
+        return "Order placed successfully";
+      } else {
+        throw new IllegalArgumentException("Product is not in stock, please try again later");
+      }
+    }finally {
+      inventoryServiceLookup.finish();
     }
   }
 
