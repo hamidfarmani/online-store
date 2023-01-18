@@ -1,15 +1,87 @@
 ---
-version: '3'
+version: '3.7'
 services:
+
+  mysql-order:
+    image: mysql:5.7
+    container_name: mysql-order
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_USER: hamid
+      MYSQL_PASSWORD: password
+      MYSQL_DATABASE: order-service
+    ports:
+      - "3307:3306"
+    volumes:
+      - ./mysql-order:/var/lib/mysql
+    restart: always
+
+  mysql-inventory:
+    image: mysql:5.7
+    container_name: mysql-inventory
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_USER: hamid
+      MYSQL_PASSWORD: password
+      MYSQL_DATABASE: inventory-service
+    ports:
+      - "3308:3306"
+    volumes:
+      - ./mysql-inventory:/var/lib/mysql
+    restart: always
+
+  mongo:
+    container_name: mongo
+    image: mongo:4.4.14-rc0-focal
+    restart: always
+    ports:
+      - "27017:27017"
+    expose:
+      - "27017"
+    volumes:
+      - ./mongo-data:/data/db
+
+  keycloak-mysql:
+    container_name: keycloak-mysql
+    image: mysql:5.7
+    volumes:
+      - ./mysql_keycloak_data:/var/lib/mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: keycloak
+      MYSQL_USER: keycloak
+      MYSQL_PASSWORD: password
+
+  keycloak:
+    container_name: keycloak
+    image: quay.io/keycloak/keycloak:18.0.0
+    command: [ "start-dev", "--import-realm" ]
+    environment:
+      DB_VENDOR: MYSQL
+      DB_ADDR: mysql
+      DB_DATABASE: keycloak
+      DB_USER: keycloak
+      DB_PASSWORD: password
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./realms/:/opt/keycloak/data/import/
+    depends_on:
+      - keycloak-mysql
+
   zookeeper:
-    image: confluentinc/cp-zookeeper:7.3.0
+    image: confluentinc/cp-zookeeper:7.0.1
     container_name: zookeeper
+    ports:
+      - "2181:2181"
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
 
   broker:
-    image: confluentinc/cp-kafka:7.3.0
+    image: confluentinc/cp-kafka:7.0.1
     container_name: broker
     ports:
       - "9092:9092"
@@ -23,3 +95,117 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+
+  zipkin:
+    image: openzipkin/zipkin
+    container_name: zipkin
+    ports:
+      - "9411:9411"
+
+  discovery-server:
+    image: hamidfarmani/discovery-server:latest
+    container_name: discovery-server
+    ports:
+      - "8761:8761"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+    depends_on:
+      - zipkin
+
+  api-gateway:
+    image: hamidfarmani/api-gateway:latest
+    container_name: api-gateway
+    ports:
+      - "8181:8080"
+    expose:
+      - "8181"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_SECURITY= TRACE
+      - eureka.client.serviceUrl.defaultZone=http://eureka:password@discovery-server:8761/eureka
+    depends_on:
+      - zipkin
+      - discovery-server
+      - keycloak
+
+  product-service:
+    container_name: product-service
+    image: hamidfarmani/product-service:latest
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - eureka.client.serviceUrl.defaultZone=http://eureka:password@discovery-server:8761/eureka
+    depends_on:
+      - mongo
+      - discovery-server
+      - api-gateway
+
+  order-service:
+    container_name: order-service
+    image: hamidfarmani/order-service:latest
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_DATASOURCE_URL=jdbc:mysql://mysql-order:3306/order-service
+      - SPRING_DATASOURCE_USERNAME=hamid
+      - SPRING_DATASOURCE_PASSWORD=password
+      - eureka.client.serviceUrl.defaultZone=http://eureka:password@discovery-server:8761/eureka
+    depends_on:
+      - mysql-order
+      - broker
+      - zipkin
+      - discovery-server
+      - api-gateway
+    restart: always
+
+  inventory-service:
+    container_name: inventory-service
+    image: hamidfarmani/inventory-service:latest
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_DATASOURCE_URL=jdbc:mysql://mysql-inventory:3306/inventory-service
+      - SPRING_DATASOURCE_USERNAME=hamid
+      - SPRING_DATASOURCE_PASSWORD=password
+      - eureka.client.serviceUrl.defaultZone=http://eureka:password@discovery-server:8761/eureka
+    depends_on:
+      - mysql-inventory
+      - discovery-server
+      - api-gateway
+
+  notification-service:
+    container_name: notification-service
+    image: hamidfarmani/notification-service:latest
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - eureka.client.serviceUrl.defaultZone=http://eureka:password@discovery-server:8761/eureka
+    depends_on:
+      - zipkin
+      - broker
+      - discovery-server
+      - api-gateway
+
+  prometheus:
+    image: prom/prometheus:v2.37.1
+    container_name: prometheus
+    restart: always
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    depends_on:
+      - product-service
+      - inventory-service
+      - order-service
+      - notification-service
+
+  grafana:
+    image: grafana/grafana-oss:8.5.2
+    container_name: grafana
+    restart: always
+    ports:
+      - "3000:3000"
+    links:
+      - prometheus:prometheus
+    volumes:
+      - ./grafana:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=password
